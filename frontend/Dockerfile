@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1
 
 # ---------- Étape 1 : dépendances ----------
-FROM node:20-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
 # ---------- Étape 2 : build ----------
-FROM node:20-alpine AS builder
+FROM node:26-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -16,7 +16,7 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 RUN npm run build
 
 # ---------- Étape 3 : image de production ----------
-FROM node:20-alpine AS production
+FROM node:26-alpine AS production
 RUN apk update && apk upgrade --no-cache
 # npm/yarn/corepack sont inutiles en production (le CMD ne lance que node) :
 # on les retire pour ne pas embarquer leurs dépendances internes vulnérables
