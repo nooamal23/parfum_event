@@ -17,7 +17,8 @@ const env = {
   isProduction: process.env.NODE_ENV === 'production',
   port: parseInt(process.env.PORT || '4000', 10),
 
-  frontendUrl: required('FRONTEND_URL', 'http://localhost:3000'),
+  //frontendUrl: required('FRONTEND_URL', 'http://localhost:3000'),
+  frontendUrl: required('FRONTEND_URL', 'http://localhost:3000').replace(/\/+$/, ''),
 
   databaseUrl: required('DATABASE_URL'),
 
