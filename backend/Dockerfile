@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1
 
 # ---------- Étape 1 : dépendances ----------
-FROM node:20-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 
 # ---------- Étape 2 : image de production ----------
-FROM node:20-alpine AS production
+FROM node:26-alpine AS production
 RUN apk update && apk upgrade --no-cache
 # npm est inutile en production (le CMD ne lance que node, jamais npm/npx) :
 # on le retire pour ne pas embarquer ses dépendances internes vulnérables
