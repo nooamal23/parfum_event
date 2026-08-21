@@ -21,6 +21,7 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 COPY --from=deps /app/node_modules ./node_modules
 COPY package*.json ./
 COPY src ./src
+RUN mkdir -p uploads/niveaux && chown -R appuser:appgroup uploads
 
 USER appuser
 
