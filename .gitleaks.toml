@@ -1,0 +1,17 @@
+title = "gitleaks config — parfum-event"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Faux positifs connus"
+paths = [
+  '''package-lock\.json''',
+  '''\.env\.example''',
+  '''docker-compose\.override\.yml''',
+]
+regexes = [
+  '''EXAMPLE''',
+  '''changeme''',
+  '''dummy_value_for_ci''',
+]

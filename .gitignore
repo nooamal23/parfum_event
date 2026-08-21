@@ -1,0 +1,23 @@
+# Environnement
+.env
+.env.local
+.env.*.local
+
+# Dépendances
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Logs
+npm-debug.log*
+*.log
+
+# Système
+.DS_Store
+Thumbs.db
+
+# Éditeurs
+.vscode/
+.idea/

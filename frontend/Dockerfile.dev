@@ -1,0 +1,9 @@
+# Dockerfile de DÉVELOPPEMENT uniquement (next dev, refresh à chaud).
+# La production utilise Dockerfile (build standalone optimisé, utilisateur non-root).
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+EXPOSE 3000
+CMD ["npm", "run", "dev"]

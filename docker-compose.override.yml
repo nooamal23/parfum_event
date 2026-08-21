@@ -1,0 +1,25 @@
+# Chargé automatiquement par `docker compose up` (jamais en production où l'on
+# précise `-f docker-compose.yml` explicitement). Ajoute le hot-reload et
+# expose PostgreSQL sur l'hôte pour pouvoir s'y connecter avec un client SQL local.
+
+services:
+  db:
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  migrate:
+    build:
+      dockerfile: Dockerfile.dev
+
+  backend:
+    build:
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./backend/src:/app/src
+
+  frontend:
+    build:
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public

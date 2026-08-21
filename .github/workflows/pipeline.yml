@@ -1,0 +1,328 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  # ---------------------------------------------------------------------
+  # 1. QUALITÉ DE CODE
+  # ---------------------------------------------------------------------
+  lint-backend:
+    name: Lint · backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - run: npm run lint
+        working-directory: backend
+
+  lint-frontend:
+    name: Lint · frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+
+  # ---------------------------------------------------------------------
+  # 2. TESTS
+  # ---------------------------------------------------------------------
+  test-backend:
+    name: Tests · backend
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U test -d test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5432/test
+      NODE_ENV: test
+      JWT_SECRET: ci-test-secret-not-for-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - name: Run DB migrations (test DB)
+        run: npm run migrate
+        working-directory: backend
+      - run: npm test -- --ci --coverage
+        working-directory: backend
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage
+          retention-days: 7
+
+  build-frontend:
+    name: Build · frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - name: Next.js build (validation)
+        env:
+          NEXT_PUBLIC_API_URL: https://api.example.invalid
+        run: npm run build
+        working-directory: frontend
+
+  # ---------------------------------------------------------------------
+  # 3. ANALYSE STATIQUE DE SÉCURITÉ (SAST)
+  # ---------------------------------------------------------------------
+  codeql:
+    name: CodeQL (SAST)
+    runs-on: ubuntu-latest
+    # Sur les PR ouvertes par Dependabot, GitHub fournit volontairement un
+    # token en lecture seule (mesure de sécurité) : l'upload des résultats
+    # CodeQL échouerait avec "Resource not accessible by integration". Ces PR
+    # ne modifient que des versions de dépendances ; lint/test/audit suffisent
+    # à les valider, CodeQL/gitleaks tournent normalement sur le push final.
+    if: github.actor != 'dependabot[bot]'
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v3
+        with:
+          # Ce dépôt est privé et sans GitHub Advanced Security : l'onglet
+          # "Security" (code scanning) n'est pas disponible. On désactive
+          # l'upload automatique (qui échouerait) et on garde le rapport
+          # en pièce jointe téléchargeable du run à la place.
+          upload: false
+          output: sarif-results
+      - name: Publier le rapport CodeQL en pièce jointe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-results
+          path: sarif-results
+          retention-days: 30
+
+  # ---------------------------------------------------------------------
+  # 4. VULNÉRABILITÉS DES DÉPENDANCES
+  # ---------------------------------------------------------------------
+  dependency-scan:
+    name: Audit dépendances (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
+      - run: npm ci
+        working-directory: ${{ matrix.dir }}
+      - name: npm audit (fail on high/critical)
+        run: npm audit --audit-level=high
+        working-directory: ${{ matrix.dir }}
+
+  # ---------------------------------------------------------------------
+  # 5. SECRETS EXPOSÉS DANS LE CODE
+  # ---------------------------------------------------------------------
+  secret-scan:
+    name: Détection de secrets (gitleaks)
+    runs-on: ubuntu-latest
+    if: github.actor != 'dependabot[bot]'
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  # ---------------------------------------------------------------------
+  # 6. VALIDATION CONFIG / ENV
+  # ---------------------------------------------------------------------
+  env-check:
+    name: Validation config & .env
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vérifier la cohérence .env.example / docker-compose.yml
+        run: bash scripts/check-env.sh
+
+  # ---------------------------------------------------------------------
+  # 7. BUILD DES IMAGES DOCKER + SCAN DE VULNÉRABILITÉS
+  # ---------------------------------------------------------------------
+  docker-build-scan:
+    name: Docker build & scan (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint Dockerfile (hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ matrix.service }}/Dockerfile
+          failure-threshold: warning
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (backend)
+        if: matrix.service == 'backend'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          load: true
+          tags: parfum-event/backend:ci
+
+      - name: Build image (frontend)
+        if: matrix.service == 'frontend'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: false
+          load: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=https://api.example.invalid
+          tags: parfum-event/frontend:ci
+
+      - name: Scan image (Trivy)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: parfum-event/${{ matrix.service }}:ci
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+  # ---------------------------------------------------------------------
+  # 8. DÉPLOIEMENT — STAGING (branche dev)
+  # ---------------------------------------------------------------------
+  deploy-staging:
+    name: Déploiement · staging
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    needs:
+      - lint-backend
+      - lint-frontend
+      - test-backend
+      - build-frontend
+      - codeql
+      - dependency-scan
+      - secret-scan
+      - env-check
+      - docker-build-scan
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_URL }}
+    steps:
+      - name: Déployer sur le VPS (staging)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_SSH_HOST }}
+          username: ${{ secrets.STAGING_SSH_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          port: ${{ secrets.STAGING_SSH_PORT || 22 }}
+          script: |
+            set -euo pipefail
+            cd ${{ vars.STAGING_DEPLOY_PATH || '/opt/parfum-event' }}
+            git fetch origin
+            git checkout dev
+            git pull origin dev
+            docker compose -f docker-compose.yml up -d --build
+            docker image prune -f
+
+  # ---------------------------------------------------------------------
+  # 9. DÉPLOIEMENT — PRODUCTION (branche main)
+  # ---------------------------------------------------------------------
+  deploy-production:
+    name: Déploiement · production
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - lint-backend
+      - lint-frontend
+      - test-backend
+      - build-frontend
+      - codeql
+      - dependency-scan
+      - secret-scan
+      - env-check
+      - docker-build-scan
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    steps:
+      - name: Déployer sur le VPS (production)
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_SSH_PORT || 22 }}
+          script: |
+            set -euo pipefail
+            cd ${{ vars.PROD_DEPLOY_PATH || '/opt/parfum-event' }}
+            git fetch origin
+            git checkout main
+            git pull origin main
+            docker compose -f docker-compose.yml up -d --build
+            docker image prune -f

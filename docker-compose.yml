@@ -1,0 +1,89 @@
+name: parfum-event
+
+# Base de référence, orientée PRODUCTION par défaut :
+#   - images multi-stage optimisées (voir backend/Dockerfile, frontend/Dockerfile)
+#   - PostgreSQL non exposé à l'hôte
+#   - aucun volume de code source (l'image contient tout ce qu'il faut)
+#
+# En développement, docker-compose.override.yml est chargé automatiquement
+# par `docker compose up` et ajoute le hot-reload. En production, on ignore
+# volontairement ce fichier :
+#   docker compose -f docker-compose.yml up -d --build
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Job "one-shot" : applique les migrations SQL puis s'arrête.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["node", "src/db/migrate.js"]
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    # Lié uniquement à 127.0.0.1 : le backend n'est joignable que depuis la machine
+    # elle-même (via le reverse proxy Nginx installé sur l'hôte), jamais directement
+    # depuis Internet. En dev, docker-compose.override.yml republie ce port sans
+    # restriction pour un accès local pratique.
+    ports:
+      - "127.0.0.1:${PORT:-4000}:4000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    restart: always
+    env_file: .env
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      # Utilisée uniquement par Next.js côté serveur (Server Components, SSR) :
+      # à l'intérieur du réseau Docker, "backend" est le nom résolu du service
+      # ci-dessus. Sans cette variable, le SSR appellerait NEXT_PUBLIC_API_URL
+      # (ex. https://api.mondomaine.tn), ce qui fonctionne aussi mais fait un
+      # aller-retour réseau externe inutile pour un appel interne au cluster.
+      API_URL_INTERNAL: http://backend:4000
+      # Écrase la variable PORT=4000 destinée au backend et importée via env_file ci-dessus :
+      # sans cette ligne, Next.js démarre sur le port 4000 au lieu de 3000.
+      PORT: 3000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
