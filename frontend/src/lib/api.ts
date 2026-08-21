@@ -59,7 +59,7 @@ export interface InscriptionPayload {
   gouvernorat: string;
   adresse?: string;
   profession: string;
-  niveau: 'debutant' | 'intermediaire' | 'avance';
+  niveau: string;
   consentementRgpd: boolean;
 }
 
@@ -89,7 +89,7 @@ export interface Participant {
   ville: string;
   gouvernorat: string;
   profession: string;
-  niveau: 'debutant' | 'intermediaire' | 'avance';
+  niveau: string;
   prix: number;
   status: 'en_attente_validation' | 'confirmee';
   created_at: string;
