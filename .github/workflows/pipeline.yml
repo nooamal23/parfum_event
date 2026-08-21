@@ -220,7 +220,7 @@ jobs:
           dockerfile: ${{ matrix.service }}/Dockerfile
           failure-threshold: warning
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build image (backend)
         if: matrix.service == 'backend'
